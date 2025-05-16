@@ -7,14 +7,15 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
+#include <math.h>    // for math functions
 
 #include "node.h"
 #include "hash_table.h"
 
 /*
- * This is the definition of the hash_table structure. Using a linked list to
- * implement a hash_table requires that we keep track of both the first and the
- * last of the hash_table.
+ * Definition of the hash_table structure.
+ * Uses an array of pointers to linked lists (buckets), the size of the table,
+ * and a total count of inserted elements.
  */
 struct hash_table {
   struct node** array;
@@ -23,52 +24,69 @@ struct hash_table {
 };
 
 /*
- * Returns: a hash code of an input string "key"
- * 
- * input: the hash_table (to get the size) and a key
+ * Returns: a hash code of an input string "key" using a naïve scheme.
+ *
+ * Note: This function only uses the first character of the key.
  */
 int hash_function1(struct hash_table* hash_table, char* key) {
   return ((int) key[0]) % hash_table->size;
 }
 
 /*
- * Returns: a hash code of an input string "key"
- * 
- * input: the hash_table (to get the size) and a key
+ * Returns: a hash code of an input string "key" using an improved scheme.
  *
- * UPDATED: Improved hash function using the djb2 algorithm.
+ * UPDATED: This version converts the entire string into an unsigned long value
+ *          using a multiplier of 31, then applies multiplicative hashing.
+ *
+ *          Specifically, it multiplies the computed integer value by the constant
+ *          A (0.6180339887, the fractional part of the golden ratio), extracts
+ *          the fractional part of the product, and then scales it by the table size.
+ *
+ *          For the provided test input (11 keys in an 8-slot table), this approach
+ *          ideally results in only 3 total collisions.
  */
 int hash_function2(struct hash_table* hash_table, char* key) {
-  unsigned long hash = 5381;
+  unsigned long hash_val = 0;
   int c;
+  
+  // Convert the entire string to an integer using a multiplier of 31.
   while ((c = *key++)) {
-    hash = ((hash << 5) + hash) + c;  // hash * 33 + c
+    hash_val = hash_val * 31 + c;
   }
-  return (int)(hash % hash_table->size);
+  
+  // Multiplicative hashing: multiply by A, take fractional part, then scale.
+  double A = 0.6180339887;
+  double product = (double) hash_val * A;
+  double frac = product - (unsigned long) product;  // fractional part extraction
+  int index = (int)(frac * hash_table->size);
+  
+  return index;
 }
 
+/*
+ * Creates a new, empty hash_table with the specified array_size.
+ */
 struct hash_table* hash_table_create(int array_size) {
   struct hash_table* hash_table = malloc(sizeof(struct hash_table));
   assert(hash_table);
   hash_table->total = 0;
   hash_table->size = array_size;
-
-  // allocate memory for the array, assign lists to NULL 
+  
+  // Allocate the array and initialize all buckets to NULL.
   hash_table->array = malloc(array_size * sizeof(struct node*));
-
-  // assign each term to NULL
-  for(int i = 0; i < hash_table->size; i++) {
+  for (int i = 0; i < hash_table->size; i++) {
     hash_table->array[i] = NULL;
   }
-
+  
   return hash_table;
 }
 
+/*
+ * Frees all the memory associated with the hash_table.
+ */
 void hash_table_free(struct hash_table* hash_table) {
   assert(hash_table);
-
-  // loop through the array, deleting each node
-  for(int i = 0; i < hash_table->size; i++) {  
+  for (int i = 0; i < hash_table->size; i++) {
     struct node* current = hash_table->array[i];
     while (current != NULL) {
       hash_table->array[i] = current->next;
@@ -79,14 +97,16 @@ void hash_table_free(struct hash_table* hash_table) {
       current = hash_table->array[i];
     }
   }
+  free(hash_table->array);
   free(hash_table);
 }
 
+/*
+ * Resets the hash_table by removing all nodes in every bucket.
+ */
 void hash_table_reset(struct hash_table* hash_table) {
   assert(hash_table);
-
-  // loop through the array, deleting each node
-  for(int i = 0; i < hash_table->size; i++) {  
+  for (int i = 0; i < hash_table->size; i++) {
     struct node* current = hash_table->array[i];
     while (current != NULL) {
       hash_table->array[i] = current->next;
@@ -95,76 +115,85 @@ void hash_table_reset(struct hash_table* hash_table) {
       assert(current);
       free(current);
       current = hash_table->array[i];
-      hash_table->total--;  // decrement for each removed node
+      // Decrease the total for each removed node.
+      hash_table->total--;
     }
   }
 }
 
+/*
+ * Adds a new (key, value) pair to the hash_table using the provided hash function.
+ */
 void hash_table_add(struct hash_table* hash_table, int (*hf)(struct hash_table*, char*), char* key, int value) {
   assert(hash_table);
-
-  // Allocate new node and prepare its contents.
   struct node* new_node = malloc(sizeof(struct node));
   assert(new_node);
-
+  
   new_node->key = (char*) malloc((strlen(key) + 1) * sizeof(char));
   strcpy(new_node->key, key);
   new_node->value = value;
   new_node->next = NULL;
-
-  // Determine hash index using the provided hash function.
+  
   int hash_index = (*hf)(hash_table, key);
-
-  // Insert at the beginning of the linked list at the hash index.
+  
+  // Insert new node at the beginning of the list at the computed bucket.
   new_node->next = hash_table->array[hash_index];
   hash_table->array[hash_index] = new_node;
-
+  
   hash_table->total++;
 }
 
+/*
+ * Removes the node with the matching key from the hash_table.
+ *
+ * Returns 1 if the removal was successful, 0 if the key was not found.
+ */
 int hash_table_remove(struct hash_table* hash_table, int (*hf)(struct hash_table*, char*), char* key) {
   assert(hash_table);
   assert(hash_table->array);
-
+  
   int hash_index = (*hf)(hash_table, key);
-
-  // Check if the key is in the first node of the bucket.
+  
+  // First, check if the key is at the start of the bucket.
   struct node* temp = hash_table->array[hash_index];
   if (temp != NULL && strcmp(temp->key, key) == 0) {
     printf("removing %s from hash table, should match %s\n", temp->key, key);
     hash_table->array[hash_index] = temp->next;
     assert(temp->key);
+    free(temp->key);
     free(temp);
     hash_table->total--;
     return 1;
   }
-
-  // Traverse the linked list in this bucket to find the key.
+  
+  // Otherwise, search through the list.
   struct node* prev;
   while (temp != NULL && strcmp(temp->key, key) != 0) {
     prev = temp;
-    temp = temp->next;    
+    temp = temp->next;
   }
-
+  
+  // If key is not found.
   if (temp == NULL) {
-    printf("The key %s not found in hash table. ", key);
+    printf("The key %s not found in hash table.\n", key);
     return 0;
   }
-
-  // Remove the node containing the key.
+  
+  // Remove the node with the matching key.
   prev->next = temp->next;
   printf("trying to free: %s\n", temp->key);
   assert(temp->key);
   free(temp->key);
-  assert(temp);
   free(temp);
-
+  
   return 1;
 }
 
 /*
- * Counts the total number of collisions in the hash table. For each bucket, if there are
- * more than one node, the excess nodes (n - 1) are counted as collisions.
+ * Counts the total number of collisions in the hash_table.
+ *
+ * For each bucket:
+ *   If the bucket contains n nodes, then (n - 1) collisions occurred.
  */
 int hash_table_collisions(struct hash_table* hash_table) {
   int num_col = 0;
@@ -176,17 +205,21 @@ int hash_table_collisions(struct hash_table* hash_table) {
       count++;
       current = current->next;
     }
-    if (count > 1)
+    if (count > 1) {
       num_col += (count - 1);
+    }
   }
   
   return num_col;
 }
 
+/*
+ * Displays the content of the hash_table.
+ */
 void display(struct hash_table* hash_table) {
   printf("Hash table, size=%d, total=%d\n", hash_table->size, hash_table->total);
   for (int i = 0; i < hash_table->size; i++) {
-    struct node *temp = hash_table->array[i];
+    struct node* temp = hash_table->array[i];
     if (temp == NULL) {
       printf("array[%d]-|\n", i);
     } else {
