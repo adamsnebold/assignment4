@@ -34,16 +34,6 @@ int hash_function1(struct hash_table* hash_table, char* key) {
 
 /*
  * Returns: a hash code of an input string "key" using an improved scheme.
- *
- * UPDATED: This version converts the entire string into an unsigned long value
- *          using a multiplier of 31, then applies multiplicative hashing.
- *
- *          Specifically, it multiplies the computed integer value by the constant
- *          A (0.6180339887, the fractional part of the golden ratio), extracts
- *          the fractional part of the product, and then scales it by the table size.
- *
- *          For the provided test input (11 keys in an 8-slot table), this approach
- *          ideally results in only 3 total collisions.
  */
 int hash_function2(struct hash_table* hash_table, char* key) {
   unsigned long hash_val = 0;
